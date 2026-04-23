@@ -10,18 +10,19 @@ export default defineConfig(({ mode }) => {
     icalUrl = null;
   }
 
+  const proxy = icalUrl
+    ? {
+        '/api/ical': {
+          target: icalUrl.origin,
+          changeOrigin: true,
+          rewrite: () => icalUrl!.pathname + icalUrl!.search,
+        },
+      }
+    : undefined;
+
   return {
     plugins: [react()],
-    server: icalUrl
-      ? {
-          proxy: {
-            '/api/ical': {
-              target: icalUrl.origin,
-              changeOrigin: true,
-              rewrite: () => icalUrl!.pathname + icalUrl!.search,
-            },
-          },
-        }
-      : {},
+    server: { proxy, port: 5173 },
+    preview: { proxy, port: 5173, host: true, strictPort: true },
   };
 });
