@@ -9,7 +9,7 @@ import {
   type LatLon,
   type WeatherIconType,
 } from './lib/weather';
-import { getBackgroundImage } from './lib/photo';
+import { getBackgroundImage, fetchPhotoIds, photoUrl } from './lib/photo';
 import {
   fetchCommuteTimes,
   parseDestinations,
@@ -89,6 +89,8 @@ export default function App() {
   const [wxErr, setWxErr] = useState<string | null>(null);
   const [trafficErr, setTrafficErr] = useState<string | null>(null);
   const [stocksErr, setStocksErr] = useState<string | null>(null);
+  const [photoIds, setPhotoIds] = useState<string[]>([]);
+  const [photoIdx, setPhotoIdx] = useState(0);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -146,6 +148,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    fetchPhotoIds().then(setPhotoIds);
+  }, []);
+
+  useEffect(() => {
+    if (photoIds.length < 2) return;
+    const t = setInterval(() => {
+      setPhotoIdx((i) => (i + 1) % photoIds.length);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [photoIds.length]);
+
+  useEffect(() => {
+    if (photoIds.length < 2) return;
+    const next = photoUrl(photoIds[(photoIdx + 1) % photoIds.length]);
+    const img = new Image();
+    img.src = next;
+  }, [photoIdx, photoIds]);
+
+  useEffect(() => {
     if (!FINNHUB_KEY || !TICKERS.length) return;
     let cancelled = false;
     async function load() {
@@ -167,7 +188,7 @@ export default function App() {
     monthDay: now.toLocaleDateString([], { month: 'long', day: 'numeric' }),
   }), [now]);
 
-  const bg = getBackgroundImage();
+  const bg = photoIds.length > 0 ? photoUrl(photoIds[photoIdx]) : getBackgroundImage();
   const sunrise = current?.sunrise
     ? current.sunrise.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '--:--';

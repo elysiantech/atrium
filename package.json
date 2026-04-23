@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "start": "vite preview"
+    "api": "PORT=3001 node --env-file=.env --experimental-strip-types server.ts",
+    "start": "node --env-file=.env --experimental-strip-types server.ts"
   },
   "dependencies": {
     "ical.js": "^2.1.0",
