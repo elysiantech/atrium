@@ -9,7 +9,8 @@ import {
   type LatLon,
   type WeatherIconType,
 } from './lib/weather';
-import { getBackgroundImage, fetchPhotoIds, photoUrl } from './lib/photo';
+import { getBackgroundImage, fetchPhotos, photoUrl, type PhotoMeta } from './lib/photo';
+import { fetchSettings, DEFAULT_SETTINGS, type DisplaySettings } from './lib/settings';
 import {
   fetchCommuteTimes,
   parseDestinations,
@@ -90,7 +91,13 @@ export default function App() {
   const [trafficErr, setTrafficErr] = useState<string | null>(null);
   const [stocksErr, setStocksErr] = useState<string | null>(null);
   const [photoIds, setPhotoIds] = useState<string[]>([]);
+  const [photoMeta, setPhotoMeta] = useState<Record<string, PhotoMeta>>({});
   const [photoIdx, setPhotoIdx] = useState(0);
+  const [layerA, setLayerA] = useState(true);
+  const fallback = getBackgroundImage();
+  const [bgA, setBgA] = useState<string>(fallback);
+  const [bgB, setBgB] = useState<string>(fallback);
+  const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -148,17 +155,42 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetchPhotoIds().then(setPhotoIds);
+    fetchPhotos().then(({ ids, meta }) => {
+      setPhotoIds(ids);
+      setPhotoMeta(meta);
+      if (ids.length > 0) {
+        const first = photoUrl(ids[0]);
+        setBgA(first);
+        setLayerA(true);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    fetchSettings().then(setSettings);
+    const t = setInterval(() => fetchSettings().then(setSettings), 10_000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
     if (photoIds.length < 2) return;
     const t = setInterval(() => {
       setPhotoIdx((i) => (i + 1) % photoIds.length);
-    }, 60_000);
+    }, settings.intervalSeconds * 1000);
     return () => clearInterval(t);
-  }, [photoIds.length]);
+  }, [photoIds.length, settings.intervalSeconds]);
 
+  // Swap the off-screen layer on index change, then flip which layer is visible.
+  useEffect(() => {
+    if (photoIds.length === 0) return;
+    const url = photoUrl(photoIds[photoIdx]);
+    if (layerA) setBgB(url); else setBgA(url);
+    const id = requestAnimationFrame(() => setLayerA((v) => !v));
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoIdx]);
+
+  // Preload next image into browser cache.
   useEffect(() => {
     if (photoIds.length < 2) return;
     const next = photoUrl(photoIds[(photoIdx + 1) % photoIds.length]);
@@ -188,7 +220,10 @@ export default function App() {
     monthDay: now.toLocaleDateString([], { month: 'long', day: 'numeric' }),
   }), [now]);
 
-  const bg = photoIds.length > 0 ? photoUrl(photoIds[photoIdx]) : getBackgroundImage();
+  const currentMeta = photoIds.length > 0 ? photoMeta[photoIds[photoIdx]] : undefined;
+  const overlayAlpha = Math.max(0, Math.min(1, (100 - settings.brightness) / 100));
+  const bgSize = settings.cropFill ? 'cover' : 'contain';
+  const transitionMs = settings.fade ? 1200 : 0;
   const sunrise = current?.sunrise
     ? current.sunrise.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '--:--';
@@ -201,15 +236,35 @@ export default function App() {
 
   return (
     <div className="w-full h-screen overflow-hidden bg-black text-white font-sans flex flex-col">
-      <div
-        className="relative flex-1 min-h-0 w-full"
-        style={{
-          backgroundImage: `linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('${bg}')`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center center',
-        }}
-      >
-        <div className="absolute inset-0 bg-black/30" />
+      <div className="relative flex-1 min-h-0 w-full bg-black">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `url('${bgA}')`,
+            backgroundSize: bgSize,
+            backgroundPosition: 'center center',
+            backgroundRepeat: 'no-repeat',
+            opacity: layerA ? 1 : 0,
+            transition: `opacity ${transitionMs}ms ease-in-out`,
+          }}
+        />
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `url('${bgB}')`,
+            backgroundSize: bgSize,
+            backgroundPosition: 'center center',
+            backgroundRepeat: 'no-repeat',
+            opacity: layerA ? 0 : 1,
+            transition: `opacity ${transitionMs}ms ease-in-out`,
+          }}
+        />
+        <div className="absolute inset-0 bg-black" style={{ opacity: overlayAlpha }} />
+        {settings.showMeta && currentMeta?.filename && (
+          <div className="absolute top-3 right-4 z-10 text-[11px] tracking-wide text-white/60">
+            {currentMeta.filename}
+          </div>
+        )}
 
         <div className="relative z-10 grid h-full grid-cols-[260px_repeat(7,minmax(0,1fr))] gap-0">
           <div className="flex h-full flex-col border-r border-white/20 bg-black/30 p-4 md:p-5">

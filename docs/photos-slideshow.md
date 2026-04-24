@@ -57,6 +57,19 @@ no graceful handling — it just starts serving errors when either expires.
   /connect page below to make it a click instead of a CLI session).
 - Even with /connect page: still need a human to click Reconnect weekly.
 
+### E. Picker + on-disk cache (Picker becomes import-only)
+- After picking, download all selected images to `cache/photos/<id>.jpg` on
+  the mini. `server.ts` serves from disk, never from Google in the hot path.
+- The two 7-day expiries stop mattering for display: nothing at runtime
+  talks to Google. Refresh token + picker session only matter when the user
+  wants to re-import (add/remove photos).
+- Re-pick cadence becomes "whenever family wants new photos in the rotation"
+  — soft, ignorable. Not a 7-day cliff.
+- Cost: ~400MB-1.5GB on disk for ~750 images. Trivial for a Mac mini.
+- Tradeoff: no auto-sync. Photos added to the source album after the import
+  don't appear until the next re-import. (Picker has never had auto-sync —
+  it's a one-shot selection — so this isn't a regression.)
+
 ## If we stay on Picker: the /connect page refactor
 
 Moving OAuth + pick out of a CLI script and into the dashboard itself.
@@ -85,25 +98,73 @@ This is ~150 lines of server code + a small settings UI. Still doesn't remove
 the 7-day cadence — just makes it a 20-second click from any browser
 instead of SSH-into-mini + CLI.
 
-## Recommendation
+## Direction (2026-04-23)
 
-Given the stated requirement ("no babysitting every 7 days"): **iCloud
-Shared Album (A)** or **local folder (C)**.
+Reframe: **on-disk cache is the core**, sources are pluggable importers
+that fill the cache. Display only ever reads from cache.
 
-- If family is Apple-heavy and you want auto-sync → A.
-- If you want zero external dependencies and are OK dropping photos onto the
-  mini manually → C.
+```
+[Source plugins]              [Cache]              [Display]
+Google Picker  ──┐
+iCloud Album   ──┼──> import ──> cache/photos/  ──> /api/photos
+Local folder   ──┤                (id.jpg + manifest.json)
+Drive folder   ──┘
+```
 
-B (Drive) only makes sense if you're willing to go through Google app
-verification; even then, upload flow is awkward for a family dashboard.
+Why this shape:
+- Removes the runtime fragility of every option above (E for Picker, but
+  also future Drive/iCloud — none of them touch the hot path).
+- Makes the source choice reversible. Switching from Picker to iCloud later
+  doesn't touch `server.ts` photo routes or `App.tsx` rotation; it just
+  swaps which importer fills `cache/photos/`.
+- Cache is also useful for non-photo media we might add later (artwork,
+  family event flyers, etc.) — same primitive.
 
-D (stay on Picker) is a poor fit for the requirement regardless of how
-polished the /connect page is, because the 7-day re-pick is fundamental to
-the API.
+### Control plane: `/connect` page
+
+A web UI on the dashboard itself, reachable from any browser on the LAN, to
+manage sources without SSH or CLI:
+
+- "Add a source" → pick type (Google Picker / iCloud Shared Album / local
+  folder / etc.), run the source-specific setup flow (OAuth + picker for
+  Google; URL paste for iCloud; path picker for local).
+- Per-source state: connected? last import? N images? next auto-refresh?
+- Per-source actions: re-import now, disconnect, set auto-refresh cadence.
+- Multiple sources can coexist — cache is the union, display rotates the
+  union shuffled.
+
+This is the path that lets "go grab photos from any source" stay open as a
+future-you decision rather than a re-architecture.
+
+### Near-term pick
+
+Start with **E (Picker + cache)** because:
+- The OAuth + picker code is already written and verified end-to-end.
+- It immediately solves the 7-day cliff for display.
+- The cache layer it forces us to build is the same cache that future
+  sources will use — not throwaway work.
+
+Defer the `/connect` page until a second source actually shows up to
+justify it. Until then, re-import via `scripts/gphotos.ts` is fine — it's
+soft cadence now, not a 7-day deadline.
+
+### Earlier options, kept for reference
+
+- **A (iCloud Shared Album)** — still the only auto-sync path. Worth
+  revisiting if family wants drop-from-iPhone-and-it-appears UX. Plugs into
+  the source-plugin model cleanly.
+- **B (Drive)** — only worth it if Google app verification happens for
+  some other reason; upload UX is bad for a family dashboard.
+- **C (local folder)** — degenerate case of the cache itself. Could be
+  exposed as a "local folder" source plugin trivially.
+- **D (stay on Picker, no cache)** — superseded by E. The /connect page
+  refactor sketched below is still relevant, but as part of the source
+  control plane, not as a Picker-specific weekly-reconnect button.
 
 ## Revert path
 
-If we pivot off Picker, the code to remove:
+If we pivot off Picker entirely (no longer relevant under E, but kept for
+the case where Picker gets dropped later in favor of iCloud or other):
 - `scripts/gphotos.ts`
 - OAuth + session logic in `server.ts` (keep the static-file + iCal routes;
   replace photo routes)
@@ -111,4 +172,6 @@ If we pivot off Picker, the code to remove:
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` from `.env`
 
 `src/lib/photo.ts` and `src/App.tsx` rotation logic stay — same `/api/photos`
-+ `/api/photos/:id` contract, new implementation behind it.
++ `/api/photos/:id` contract, new implementation behind it. Under the
+cache-as-core direction, the contract is satisfied by reading `cache/photos/`
+regardless of which importer filled it.
