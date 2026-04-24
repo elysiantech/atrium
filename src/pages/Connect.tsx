@@ -135,6 +135,7 @@ export default function Connect() {
   }
 
   const g = status?.gphotos;
+  const loaded = status !== null;
 
   return (
     <div className="min-h-screen bg-black text-white font-sans">
@@ -160,27 +161,31 @@ export default function Connect() {
             <div>
               <div className="text-[18px] font-light">Google Photos</div>
               <div className="mt-1 text-[13px] text-white/60">
-                {g?.connected ? 'Connected' : 'Not connected'}
-                {g?.connected && g.pickedCount > 0 && (
+                {!loaded ? 'Checking…' : g?.connected ? 'Connected' : 'Not connected'}
+                {loaded && g?.connected && g.pickedCount > 0 && (
                   <>
                     {' · '}{g.pickedCount} picked
                     {' · '}{g.cachedCount} cached
                   </>
                 )}
               </div>
-              {g?.connected && g.lastSyncAt && (
+              {loaded && g?.connected && g.lastSyncAt && (
                 <div className="mt-1 text-[12px] text-white/50">Last sync {fmtRelative(g.lastSyncAt)}</div>
               )}
-              {g?.connected && g.hasSession && g.sessionExpiresAt && (
+              {loaded && g?.connected && g.hasSession && g.sessionExpiresAt && (
                 <div className="mt-1 text-[12px] text-white/50">
                   Picker session expires {fmtExpires(g.sessionExpiresAt)}
                 </div>
               )}
             </div>
-            <div className={`h-2 w-2 rounded-full ${g?.connected ? 'bg-emerald-400' : 'bg-white/30'}`} />
+            <div
+              className={`h-2 w-2 rounded-full ${
+                !loaded ? 'bg-white/20 animate-pulse' : g?.connected ? 'bg-emerald-400' : 'bg-white/30'
+              }`}
+            />
           </div>
 
-          {!g?.connected && (
+          {loaded && !g?.connected && (
             <div className="mt-6">
               <button
                 onClick={connect}
@@ -189,19 +194,34 @@ export default function Connect() {
                 Connect Google Photos
               </button>
               <div className="mt-2 text-[11px] text-white/50">
-                OAuth requires opening this page on the server machine (<code>http://localhost:{window.location.port || '5173'}/connect</code> on the mini).
+                OAuth must be completed from a browser on the mini itself (<code>http://localhost:{window.location.port || '5173'}/connect</code>). Google requires a loopback redirect, so connecting from a phone/laptop on the LAN will silently fail.
               </div>
             </div>
           )}
 
-          {g?.connected && (
+          {loaded && g?.connected && g.pickedCount === 0 && (
+            <div className="mt-6">
+              <button
+                onClick={pick}
+                disabled={picking}
+                className="rounded bg-white px-4 py-2 text-[13px] font-medium text-black hover:bg-white/90 disabled:opacity-40"
+              >
+                {picking ? 'Opening picker…' : 'Pick your photos →'}
+              </button>
+              <div className="mt-2 text-[11px] text-white/50">
+                Opens the Google Photos picker in a new tab. Select photos on any device — they appear on the dashboard as the rotation cycles.
+              </div>
+            </div>
+          )}
+
+          {loaded && g?.connected && g.pickedCount > 0 && (
             <div className="mt-6 flex flex-wrap gap-2">
               <button
                 onClick={pick}
                 disabled={picking}
                 className="rounded border border-white/20 bg-white/10 px-4 py-2 text-[13px] hover:bg-white/20 disabled:opacity-40"
               >
-                {g.hasSession ? 'Re-pick photos' : 'Pick photos'}
+                Re-pick photos
               </button>
               <button
                 onClick={onDisconnectClick}
