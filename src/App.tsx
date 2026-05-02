@@ -23,10 +23,6 @@ const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
 const HOME = import.meta.env.VITE_HOME_ADDRESS ?? '';
 const DESTINATIONS = parseDestinations(import.meta.env.VITE_COMMUTE ?? '');
 const FINNHUB_KEY = import.meta.env.VITE_FINNHUB_API_KEY ?? '';
-const TICKERS = (import.meta.env.VITE_TICKERS ?? '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
 
 function WeatherIcon({ type, className = '' }: { type: WeatherIconType; className?: string }) {
   if (type === 'rain') return <CloudRain className={className} />;
@@ -141,6 +137,8 @@ export default function App() {
     if (!MAPS_KEY || !HOME || !DESTINATIONS.length) return;
     let cancelled = false;
     async function load() {
+      const h = new Date().getHours();
+      if (h < 6 || h >= 22) return;
       try {
         const c = await fetchCommuteTimes(HOME, DESTINATIONS, MAPS_KEY);
         c.sort((a, b) => a.minutes - b.minutes);
@@ -150,7 +148,7 @@ export default function App() {
       }
     }
     load();
-    const t = setInterval(load, 5 * 60_000);
+    const t = setInterval(load, 15 * 60_000);
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
@@ -199,11 +197,15 @@ export default function App() {
   }, [photoIdx, photoIds]);
 
   useEffect(() => {
-    if (!FINNHUB_KEY || !TICKERS.length) return;
+    if (!FINNHUB_KEY || settings.tickers.length === 0) {
+      setQuotes([]);
+      return;
+    }
     let cancelled = false;
+    const tickers = settings.tickers;
     async function load() {
       try {
-        const q = await fetchQuotes(TICKERS, FINNHUB_KEY);
+        const q = await fetchQuotes(tickers, FINNHUB_KEY);
         if (!cancelled) { setQuotes(q); setStocksErr(null); }
       } catch (e) {
         if (!cancelled) setStocksErr(e instanceof Error ? e.message : String(e));
@@ -212,7 +214,7 @@ export default function App() {
     load();
     const t = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+  }, [settings.tickers]);
 
   const formatted = useMemo(() => ({
     time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -367,7 +369,13 @@ export default function App() {
           <TickerRow quotes={quotes} />
         ) : (
           <div className="px-4 text-[12px] text-white/50">
-            {stocksErr ? `stocks: ${stocksErr}` : FINNHUB_KEY ? 'loading quotes…' : 'set VITE_FINNHUB_API_KEY in .env'}
+            {stocksErr
+              ? `stocks: ${stocksErr}`
+              : !FINNHUB_KEY
+                ? 'set VITE_FINNHUB_API_KEY in .env'
+                : settings.tickers.length === 0
+                  ? 'add tickers on /connect'
+                  : 'loading quotes…'}
           </div>
         )}
       </div>
