@@ -50,7 +50,21 @@ export default function Connect() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [picking, setPicking] = useState(false);
   const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS);
+  const [tickerInput, setTickerInput] = useState('');
   const confirmTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    setTickerInput(settings.tickers.join(', '));
+  }, [settings.tickers]);
+
+  function commitTickers() {
+    const parsed = tickerInput
+      .split(/[,\s]+/)
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+    if (parsed.join(',') === settings.tickers.join(',')) return;
+    patch({ tickers: parsed });
+  }
 
   async function patch(p: Partial<DisplaySettings>) {
     const next = { ...settings, ...p };
@@ -298,6 +312,25 @@ export default function Connect() {
             />
             <span>Fade photos in and out gradually</span>
           </label>
+        </div>
+
+        <h2 className="mt-12 text-[22px] font-thin tracking-tight">Widgets</h2>
+        <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.03] p-6 space-y-6">
+          <div>
+            <label className="block text-[13px] font-medium text-white/90">Stock tickers</label>
+            <input
+              type="text"
+              value={tickerInput}
+              onChange={(e) => setTickerInput(e.target.value)}
+              onBlur={commitTickers}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+              placeholder="NVDA, AMD, MSFT"
+              className="mt-2 w-full rounded border border-white/15 bg-black/40 px-3 py-2 text-[13px] text-white focus:border-white/40 focus:outline-none"
+            />
+            <div className="mt-1 text-[11px] text-white/50">
+              Comma- or space-separated. Saved on blur or Enter. Requires <code>VITE_FINNHUB_API_KEY</code> in <code>.env</code>.
+            </div>
+          </div>
         </div>
 
         <div className="mt-8 text-[11px] text-white/40">

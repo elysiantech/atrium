@@ -4,6 +4,7 @@ export type DisplaySettings = {
   showMeta: boolean;
   cropFill: boolean;
   fade: boolean;
+  tickers: string[];
 };
 
 export const DEFAULT_SETTINGS: DisplaySettings = {
@@ -12,6 +13,7 @@ export const DEFAULT_SETTINGS: DisplaySettings = {
   showMeta: false,
   cropFill: true,
   fade: true,
+  tickers: [],
 };
 
 export async function fetchSettings(): Promise<DisplaySettings> {

@@ -59,14 +59,34 @@ type Settings = {
   showMeta: boolean;
   cropFill: boolean; // true = cover, false = contain
   fade: boolean;
+  tickers: string[];
 };
+const ENV_TICKERS = (process.env.VITE_TICKERS ?? '')
+  .split(',')
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
 const DEFAULT_SETTINGS: Settings = {
   intervalSeconds: 60,
   brightness: 35,
   showMeta: false,
   cropFill: true,
   fade: true,
+  tickers: ENV_TICKERS,
 };
+function normalizeTickers(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of input) {
+    if (typeof v !== 'string') continue;
+    const t = v.trim().toUpperCase();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
 function readSettings(): Settings {
   if (!existsSync(SETTINGS_FILE)) return { ...DEFAULT_SETTINGS };
   try {
@@ -442,6 +462,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
         next.showMeta = Boolean(next.showMeta);
         next.cropFill = Boolean(next.cropFill);
         next.fade = Boolean(next.fade);
+        next.tickers = normalizeTickers(next.tickers);
         writeSettings(next);
         return json(res, 200, next);
       }
