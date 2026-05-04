@@ -481,15 +481,6 @@ export default function App() {
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            {dayOffset !== 0 && (
-              <button
-                type="button"
-                onClick={() => setDayOffset(0)}
-                className="absolute top-2 right-3 z-20 rounded-full bg-sky-500/80 px-3 py-1 text-[11px] tracking-[0.15em] uppercase text-white backdrop-blur-sm hover:bg-sky-500"
-              >
-                Today
-              </button>
-            )}
             <div
               className="flex h-full"
               style={{
@@ -502,6 +493,7 @@ export default function App() {
               {stripDays.map(({ date, day }) => {
                 const fc = forecast.find(f => f.date.toDateString() === date.toDateString());
                 const isToday = date.toDateString() === today.toDateString();
+                const highlightLabel = isToday && dayOffset !== 0;
                 return (
                   <div
                     key={date.toDateString()}
@@ -510,8 +502,8 @@ export default function App() {
                   >
                     <div className="px-3 pt-3 pb-1 shrink-0">
                       <div className="flex items-baseline gap-2 border-b border-white/20 pb-2">
-                        <div className="text-[28px] md:text-[32px] font-thin leading-none tracking-tight">{date.getDate()}</div>
-                        <div className="text-[14px] md:text-[16px] font-light leading-none tracking-tight">{dayLabel(date, today)}</div>
+                        <div className={`text-[28px] md:text-[32px] font-thin leading-none tracking-tight ${highlightLabel ? 'text-sky-400' : ''}`}>{date.getDate()}</div>
+                        <div className={`text-[14px] md:text-[16px] font-light leading-none tracking-tight ${highlightLabel ? 'text-sky-400' : ''}`}>{dayLabel(date, today)}</div>
                       </div>
                     </div>
 
