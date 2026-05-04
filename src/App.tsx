@@ -333,6 +333,12 @@ export default function App() {
   const gridRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (dayOffset === 0 || isDragging) return;
+    const t = setTimeout(() => setDayOffset(0), 15_000);
+    return () => clearTimeout(t);
+  }, [dayOffset, isDragging]);
+
+  useEffect(() => {
     const grid = gridRef.current;
     if (!grid) return;
     const update = () => setColWidth(grid.clientWidth / VISIBLE_DAYS);
@@ -479,7 +485,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setDayOffset(0)}
-                className="absolute top-2 right-3 z-20 rounded-full bg-white/10 px-3 py-1 text-[11px] tracking-[0.15em] uppercase text-white/85 backdrop-blur-sm hover:bg-white/20"
+                className="absolute top-2 right-3 z-20 rounded-full bg-sky-500/80 px-3 py-1 text-[11px] tracking-[0.15em] uppercase text-white backdrop-blur-sm hover:bg-sky-500"
               >
                 Today
               </button>
