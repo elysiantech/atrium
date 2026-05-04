@@ -14,7 +14,7 @@ export type CalendarDay = {
 
 const ICAL_PROXY = '/api/ical';
 
-export async function fetchCalendar(days = 7): Promise<CalendarDay[]> {
+export async function fetchCalendar(daysBack = 14, daysForward = 14): Promise<CalendarDay[]> {
   const res = await fetch(ICAL_PROXY);
   if (!res.ok) throw new Error(`iCal ${res.status}`);
   const text = await res.text();
@@ -28,13 +28,15 @@ export async function fetchCalendar(days = 7): Promise<CalendarDay[]> {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const windowStart = new Date(today);
+  windowStart.setDate(windowStart.getDate() - daysBack);
   const windowEnd = new Date(today);
-  windowEnd.setDate(windowEnd.getDate() + days);
+  windowEnd.setDate(windowEnd.getDate() + daysForward + 1);
 
   const out: CalendarEvent[] = [];
   const pushEvent = (start: Date, end: Date, allDay: boolean, title: string) => {
     if (start >= windowEnd) return;
-    if (end <= today) return;
+    if (end <= windowStart) return;
     out.push({ start, end, allDay, title });
   };
 
@@ -46,10 +48,10 @@ export async function fetchCalendar(days = 7): Promise<CalendarDay[]> {
       const iter = event.iterator();
       let next = iter.next();
       let guard = 0;
-      while (next && guard++ < 2000) {
+      while (next && guard++ < 6000) {
         const d = next.toJSDate();
         if (d >= windowEnd) break;
-        if (d >= today) {
+        if (d >= windowStart) {
           const occ = event.getOccurrenceDetails(next);
           pushEvent(
             occ.startDate.toJSDate(),
@@ -67,9 +69,10 @@ export async function fetchCalendar(days = 7): Promise<CalendarDay[]> {
     }
   }
 
+  const totalDays = daysBack + daysForward + 1;
   const byDay = new Map<string, CalendarEvent[]>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today);
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(windowStart);
     d.setDate(d.getDate() + i);
     byDay.set(d.toDateString(), []);
   }

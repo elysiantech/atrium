@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Cloud, CloudRain, CloudSun, Sun, Wind, Sunrise, Car } from 'lucide-react';
 import { fetchCalendar, type CalendarDay } from './lib/calendar';
 import {
@@ -31,11 +31,18 @@ function WeatherIcon({ type, className = '' }: { type: WeatherIconType; classNam
   return <Cloud className={className} />;
 }
 
-function dayLabel(date: Date, idx: number): string {
-  if (idx === 0) return 'Today';
-  if (idx === 1) return 'Tomorrow';
+function dayLabel(date: Date, today: Date): string {
+  const diff = Math.round((date.getTime() - today.getTime()) / 86400_000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
   return date.toLocaleDateString([], { weekday: 'long' });
 }
+
+const PAST_DAYS = 14;
+const FUTURE_DAYS = 14;
+const VISIBLE_DAYS = 7;
+const MIN_OFFSET = -PAST_DAYS;
+const MAX_OFFSET = FUTURE_DAYS - VISIBLE_DAYS + 1;
 
 function footerLabel(date: Date): string {
   return date.toLocaleDateString([], { weekday: 'short' }).toUpperCase();
@@ -55,22 +62,91 @@ function trafficColor(minutes: number, typical: number): string {
 }
 
 function TickerRow({ quotes }: { quotes: Quote[] }) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const txRef = useRef(0);
+  const widthRef = useRef(0);
+  const dragRef = useRef<{ startX: number; startTx: number; pointerId: number } | null>(null);
+
+  const doubled = useMemo(() => (quotes.length ? [...quotes, ...quotes] : []), [quotes]);
+
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el || doubled.length === 0) return;
+    widthRef.current = el.scrollWidth / 2;
+  }, [doubled]);
+
+  useEffect(() => {
+    if (doubled.length === 0) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      const w = widthRef.current;
+      if (!dragRef.current && w > 0) {
+        const speed = w / 90;
+        let next = txRef.current - speed * dt;
+        if (next <= -w) next += w;
+        if (next > 0) next -= w;
+        txRef.current = next;
+        if (innerRef.current) innerRef.current.style.transform = `translateX(${next}px)`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [doubled]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startX: e.clientX, startTx: txRef.current, pointerId: e.pointerId };
+    wrapperRef.current?.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const w = widthRef.current;
+    if (!drag || w <= 0) return;
+    let next = drag.startTx + (e.clientX - drag.startX);
+    while (next <= -w) next += w;
+    while (next > 0) next -= w;
+    txRef.current = next;
+    if (innerRef.current) innerRef.current.style.transform = `translateX(${next}px)`;
+  };
+
+  const endDrag = () => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    wrapperRef.current?.releasePointerCapture(drag.pointerId);
+    dragRef.current = null;
+  };
+
   if (!quotes.length) return null;
-  const doubled = [...quotes, ...quotes];
+
   return (
-    <div className="flex animate-marquee whitespace-nowrap">
-      {doubled.map((q, i) => {
-        const up = q.changePct >= 0;
-        return (
-          <span key={i} className="px-6 text-[13px] md:text-[14px] flex items-baseline gap-2">
-            <span className="font-medium text-white">{q.symbol}</span>
-            <span className="text-white/80">{q.price.toFixed(2)}</span>
-            <span className={up ? 'text-emerald-400' : 'text-rose-400'}>
-              {up ? '▲' : '▼'} {Math.abs(q.changePct).toFixed(2)}%
+    <div
+      ref={wrapperRef}
+      className="relative w-full h-full overflow-hidden flex items-center cursor-grab active:cursor-grabbing"
+      style={{ touchAction: 'pan-y' }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    >
+      <div ref={innerRef} className="flex whitespace-nowrap will-change-transform">
+        {doubled.map((q, i) => {
+          const up = q.changePct >= 0;
+          return (
+            <span key={i} className="px-6 text-[13px] md:text-[14px] flex items-baseline gap-2 select-none">
+              <span className="font-medium text-white">{q.symbol}</span>
+              <span className="text-white/80">{q.price.toFixed(2)}</span>
+              <span className={up ? 'text-emerald-400' : 'text-rose-400'}>
+                {up ? '▲' : '▼'} {Math.abs(q.changePct).toFixed(2)}%
+              </span>
             </span>
-          </span>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -104,7 +180,7 @@ export default function App() {
     let cancelled = false;
     async function load() {
       try {
-        const cal = await fetchCalendar(7);
+        const cal = await fetchCalendar(PAST_DAYS, FUTURE_DAYS);
         if (!cancelled) { setDays(cal); setCalErr(null); }
       } catch (e) {
         if (!cancelled) setCalErr(e instanceof Error ? e.message : String(e));
@@ -133,24 +209,30 @@ export default function App() {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
+  const loadCommutes = useCallback(async () => {
+    if (!MAPS_KEY || !HOME || !DESTINATIONS.length) return;
+    try {
+      const c = await fetchCommuteTimes(HOME, DESTINATIONS, MAPS_KEY);
+      c.sort((a, b) => a.minutes - b.minutes);
+      setCommutes(c);
+      setTrafficErr(null);
+    } catch (e) {
+      setTrafficErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (!MAPS_KEY || !HOME || !DESTINATIONS.length) return;
     let cancelled = false;
-    async function load() {
+    async function tick() {
       const h = new Date().getHours();
       if (h < 6 || h >= 22) return;
-      try {
-        const c = await fetchCommuteTimes(HOME, DESTINATIONS, MAPS_KEY);
-        c.sort((a, b) => a.minutes - b.minutes);
-        if (!cancelled) { setCommutes(c); setTrafficErr(null); }
-      } catch (e) {
-        if (!cancelled) setTrafficErr(e instanceof Error ? e.message : String(e));
-      }
+      if (!cancelled) await loadCommutes();
     }
-    load();
-    const t = setInterval(load, 15 * 60_000);
+    tick();
+    const t = setInterval(tick, 15 * 60_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+  }, [loadCommutes]);
 
   useEffect(() => {
     fetchPhotos().then(({ ids, meta }) => {
@@ -196,17 +278,24 @@ export default function App() {
     img.src = next;
   }, [photoIdx, photoIds]);
 
+  const tickersKey = settings.tickers.join(',');
   useEffect(() => {
-    if (!FINNHUB_KEY || settings.tickers.length === 0) {
+    if (!FINNHUB_KEY || tickersKey === '') {
       setQuotes([]);
       return;
     }
     let cancelled = false;
-    const tickers = settings.tickers;
+    const tickers = tickersKey.split(',');
     async function load() {
       try {
         const q = await fetchQuotes(tickers, FINNHUB_KEY);
-        if (!cancelled) { setQuotes(q); setStocksErr(null); }
+        if (cancelled) return;
+        if (q.length > 0) {
+          setQuotes(q);
+          setStocksErr(null);
+        } else {
+          setStocksErr('no quote data');
+        }
       } catch (e) {
         if (!cancelled) setStocksErr(e instanceof Error ? e.message : String(e));
       }
@@ -214,7 +303,7 @@ export default function App() {
     load();
     const t = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [settings.tickers]);
+  }, [tickersKey]);
 
   const formatted = useMemo(() => ({
     time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -235,6 +324,65 @@ export default function App() {
     d.setHours(0, 0, 0, 0);
     return d;
   }, [now]);
+
+  const [dayOffset, setDayOffset] = useState(0);
+  const [dragPx, setDragPx] = useState(0);
+  const [colWidth, setColWidth] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; pointerId: number } | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const update = () => setColWidth(grid.clientWidth / VISIBLE_DAYS);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(grid);
+    return () => ro.disconnect();
+  }, []);
+
+  const stripDays = useMemo(() => {
+    const totalDays = PAST_DAYS + FUTURE_DAYS + 1;
+    const byKey = new Map(days.map((d) => [d.date.toDateString(), d]));
+    const out: { date: Date; day: CalendarDay | undefined }[] = [];
+    for (let i = 0; i < totalDays; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - PAST_DAYS + i);
+      out.push({ date, day: byKey.get(date.toDateString()) });
+    }
+    return out;
+  }, [days, today]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const grid = gridRef.current;
+    if (!grid || colWidth <= 0) return;
+    dragRef.current = { startX: e.clientX, pointerId: e.pointerId };
+    setIsDragging(true);
+    grid.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const raw = e.clientX - drag.startX;
+    const minPx = (dayOffset - MAX_OFFSET) * colWidth;
+    const maxPx = (dayOffset - MIN_OFFSET) * colWidth;
+    setDragPx(Math.max(minPx, Math.min(maxPx, raw)));
+  };
+
+  const endDrag = () => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const raw = -dragPx / colWidth;
+    const deltaDays = Math.sign(raw) * Math.round(Math.abs(raw));
+    const next = Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, dayOffset + deltaDays));
+    setDayOffset(next);
+    setDragPx(0);
+    setIsDragging(false);
+    gridRef.current?.releasePointerCapture(drag.pointerId);
+    dragRef.current = null;
+  };
 
   return (
     <div className="w-full h-screen overflow-hidden bg-black text-white font-sans flex flex-col">
@@ -268,8 +416,8 @@ export default function App() {
           </div>
         )}
 
-        <div className="relative z-10 grid h-full grid-cols-[260px_repeat(7,minmax(0,1fr))] gap-0">
-          <div className="flex h-full flex-col border-r border-white/20 bg-black/30 p-4 md:p-5">
+        <div className="relative z-10 flex h-full">
+          <div className="w-[260px] shrink-0 flex h-full flex-col border-r border-white/20 bg-black/30 p-4 md:p-5">
             <div>
               <div className="text-[56px] md:text-[64px] font-thin tracking-tight leading-none whitespace-nowrap">{formatted.time}</div>
               <div className="mt-4 text-[22px] md:text-[26px] font-light leading-none">{formatted.day},</div>
@@ -277,7 +425,12 @@ export default function App() {
             </div>
 
             {(commutes.length > 0 || trafficErr) && (
-              <div className="mt-6">
+              <div
+                className="mt-6 cursor-pointer select-none"
+                onClick={loadCommutes}
+                role="button"
+                aria-label="Refresh drive times"
+              >
                 <div className="flex items-center gap-2 text-[10px] md:text-[11px] tracking-[0.18em] text-white/60 uppercase mb-2">
                   <Car className="h-3.5 w-3.5" />
                   <span>Drive Times</span>
@@ -313,48 +466,77 @@ export default function App() {
             </div>
           </div>
 
-          {Array.from({ length: 7 }).map((_, idx) => {
-            const day = days[idx];
-            const date = day?.date ?? new Date(today.getTime() + idx * 86400_000);
-            const fc = forecast.find(f => f.date.toDateString() === date.toDateString());
-            return (
-              <div
-                key={idx}
-                className={`relative flex h-full flex-col border-r border-white/20 ${idx === 2 || idx === 3 ? 'bg-black/20' : 'bg-black/10'}`}
+          <div
+            ref={gridRef}
+            className="relative flex-1 overflow-hidden"
+            style={{ touchAction: 'pan-y' }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            {dayOffset !== 0 && (
+              <button
+                type="button"
+                onClick={() => setDayOffset(0)}
+                className="absolute top-2 right-3 z-20 rounded-full bg-white/10 px-3 py-1 text-[11px] tracking-[0.15em] uppercase text-white/85 backdrop-blur-sm hover:bg-white/20"
               >
-                <div className="px-3 pt-3 pb-1 shrink-0">
-                  <div className="flex items-baseline gap-2 border-b border-white/20 pb-2">
-                    <div className="text-[28px] md:text-[32px] font-thin leading-none tracking-tight">{date.getDate()}</div>
-                    <div className="text-[14px] md:text-[16px] font-light leading-none tracking-tight">{dayLabel(date, idx)}</div>
-                  </div>
-                </div>
-
-                <div className="flex-1 min-h-0 px-3 pt-2 overflow-hidden">
-                  {day?.events.map((ev, i) => (
-                    <div key={i} className="relative pl-3 mb-2">
-                      <div className="absolute left-0 top-0 h-full w-1 rounded-full bg-fuchsia-600" />
-                      <div className="text-white">
-                        <div className="text-[11px] md:text-[12px] font-normal text-white/80 tracking-tight leading-none mb-0.5">{formatEventTime(ev)}</div>
-                        <div className="text-[13px] md:text-[14px] font-normal leading-[1.15] tracking-tight">{ev.title}</div>
+                Today
+              </button>
+            )}
+            <div
+              className="flex h-full"
+              style={{
+                width: colWidth ? colWidth * stripDays.length : '100%',
+                transform: `translateX(${-(PAST_DAYS + dayOffset) * colWidth + dragPx}px)`,
+                transition: isDragging ? 'none' : 'transform 240ms ease-out',
+                willChange: 'transform',
+              }}
+            >
+              {stripDays.map(({ date, day }) => {
+                const fc = forecast.find(f => f.date.toDateString() === date.toDateString());
+                const isToday = date.toDateString() === today.toDateString();
+                return (
+                  <div
+                    key={date.toDateString()}
+                    style={{ width: colWidth || `${100 / VISIBLE_DAYS}%`, flexShrink: 0 }}
+                    className={`relative flex h-full flex-col border-r border-white/20 ${isToday ? 'bg-black/30' : 'bg-black/10'}`}
+                  >
+                    <div className="px-3 pt-3 pb-1 shrink-0">
+                      <div className="flex items-baseline gap-2 border-b border-white/20 pb-2">
+                        <div className="text-[28px] md:text-[32px] font-thin leading-none tracking-tight">{date.getDate()}</div>
+                        <div className="text-[14px] md:text-[16px] font-light leading-none tracking-tight">{dayLabel(date, today)}</div>
                       </div>
                     </div>
-                  ))}
-                </div>
 
-                <div className="px-3 pb-4 pt-2 flex h-[120px] shrink-0 flex-col items-center justify-end">
-                  {fc ? (
-                    <>
-                      <div className="mb-1 text-[12px] md:text-[13px] font-light tracking-[0.18em] text-white/90">{footerLabel(date)}</div>
-                      <WeatherIcon type={fc.icon} className="h-10 w-10 md:h-12 md:w-12 text-white/95" />
-                      <div className="mt-1 text-[14px] md:text-[15px] font-light text-white/90">
-                        {fc.highF} <span className="text-white/60">{fc.lowF}</span>
-                      </div>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+                    <div className="flex-1 min-h-0 px-3 pt-2 overflow-hidden">
+                      {day?.events.map((ev, i) => (
+                        <div key={i} className="relative pl-3 mb-2">
+                          <div className="absolute left-0 top-0 h-full w-1 rounded-full bg-fuchsia-600" />
+                          <div className="text-white">
+                            <div className="text-[11px] md:text-[12px] font-normal text-white/80 tracking-tight leading-none mb-0.5">{formatEventTime(ev)}</div>
+                            <div className="text-[13px] md:text-[14px] font-normal leading-[1.15] tracking-tight">{ev.title}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="px-3 pb-4 pt-2 flex h-[120px] shrink-0 flex-col items-center justify-end">
+                      {fc ? (
+                        <>
+                          <div className="mb-1 text-[12px] md:text-[13px] font-light tracking-[0.18em] text-white/90">{footerLabel(date)}</div>
+                          <WeatherIcon type={fc.icon} className="h-10 w-10 md:h-12 md:w-12 text-white/95" />
+                          <div className="mt-1 text-[14px] md:text-[15px] font-light text-white/90">
+                            {fc.highF} <span className="text-white/60">{fc.lowF}</span>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {calErr && (

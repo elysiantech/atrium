@@ -89,10 +89,15 @@ export async function fetchWeather(lat: number, lon: number): Promise<WeatherBun
     timezone: 'auto',
     temperature_unit: 'fahrenheit',
     wind_speed_unit: 'mph',
+    past_days: '14',
+    forecast_days: '15',
   });
   const res = await fetch(`${FORECAST}?${params}`);
   if (!res.ok) throw new Error(`forecast ${res.status}`);
   const j = (await res.json()) as ForecastResponse;
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayIdx = Math.max(0, j.daily.time.indexOf(todayKey));
 
   const current: CurrentWeather = {
     tempF: Math.round(j.current.temperature_2m),
@@ -100,10 +105,10 @@ export async function fetchWeather(lat: number, lon: number): Promise<WeatherBun
     icon: iconFromWmo(j.current.weather_code),
     windMph: Math.round(j.current.wind_speed_10m),
     windDir: windDir(j.current.wind_direction_10m ?? 0),
-    sunrise: new Date(j.daily.sunrise[0]),
+    sunrise: new Date(j.daily.sunrise[todayIdx]),
   };
 
-  const forecast: DailyForecast[] = j.daily.time.slice(0, 7).map((dateStr, i) => {
+  const forecast: DailyForecast[] = j.daily.time.map((dateStr, i) => {
     const [y, m, d] = dateStr.split('-').map(Number);
     return {
       date: new Date(y, m - 1, d),
