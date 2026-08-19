@@ -10,7 +10,7 @@ import {
   type WeatherIconType,
 } from './lib/weather';
 import { getBackgroundImage, fetchPhotos, photoUrl, type PhotoMeta } from './lib/photo';
-import { fetchSettings, DEFAULT_SETTINGS, type DisplaySettings } from './lib/settings';
+import { fetchSettings, readCachedSettings, type DisplaySettings } from './lib/settings';
 import {
   fetchCommuteTimes,
   parseDestinations,
@@ -151,6 +151,55 @@ function TickerRow({ quotes }: { quotes: Quote[] }) {
   );
 }
 
+function PhotoLayer({
+  url,
+  visible,
+  transitionMs,
+  intervalSeconds,
+  cropFill,
+  reverse = false,
+}: {
+  url: string;
+  visible: boolean;
+  transitionMs: number;
+  intervalSeconds: number;
+  cropFill: boolean;
+  reverse?: boolean;
+}) {
+  const background = {
+    backgroundImage: `url('${url}')`,
+    backgroundPosition: 'center center',
+    backgroundRepeat: 'no-repeat',
+  };
+
+  return (
+    <div
+      className="absolute inset-0 overflow-hidden"
+      style={{
+        opacity: visible ? 1 : 0,
+        transition: `opacity ${transitionMs}ms ease-in-out`,
+      }}
+    >
+      {!cropFill && (
+        <div
+          className="absolute inset-[-3%] scale-110 blur-2xl opacity-80"
+          style={{ ...background, backgroundSize: 'cover' }}
+        />
+      )}
+      <div
+        key={url}
+        className={`absolute inset-0 ${cropFill ? 'atrium-photo-motion-fill' : 'atrium-photo-motion-fit'}`}
+        style={{
+          ...background,
+          backgroundSize: cropFill ? 'cover' : 'contain',
+          animationDuration: `${Math.max(15, intervalSeconds + 1)}s`,
+          animationDirection: reverse ? 'reverse' : 'normal',
+        }}
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const [now, setNow] = useState(new Date());
   const [days, setDays] = useState<CalendarDay[]>([]);
@@ -169,7 +218,7 @@ export default function App() {
   const fallback = getBackgroundImage();
   const [bgA, setBgA] = useState<string>(fallback);
   const [bgB, setBgB] = useState<string>(fallback);
-  const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<DisplaySettings>(readCachedSettings);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -301,7 +350,11 @@ export default function App() {
       }
     }
     load();
-    const t = setInterval(load, 60_000);
+    // Large portfolio/watchlist unions can consume one quote request per symbol.
+    // Refresh those less aggressively so a household display stays comfortably
+    // below the provider's request ceiling.
+    const refreshMs = tickers.length > 20 ? 5 * 60_000 : 60_000;
+    const t = setInterval(load, refreshMs);
     return () => { cancelled = true; clearInterval(t); };
   }, [tickersKey]);
 
@@ -313,7 +366,6 @@ export default function App() {
 
   const currentMeta = photoIds.length > 0 ? photoMeta[photoIds[photoIdx]] : undefined;
   const overlayAlpha = Math.max(0, Math.min(1, (100 - settings.brightness) / 100));
-  const bgSize = settings.cropFill ? 'cover' : 'contain';
   const transitionMs = settings.fade ? 1200 : 0;
   const sunrise = current?.sunrise
     ? current.sunrise.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -393,27 +445,20 @@ export default function App() {
   return (
     <div className="w-full h-screen overflow-hidden bg-black text-white font-sans flex flex-col">
       <div className="relative flex-1 min-h-0 w-full bg-black">
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: `url('${bgA}')`,
-            backgroundSize: bgSize,
-            backgroundPosition: 'center center',
-            backgroundRepeat: 'no-repeat',
-            opacity: layerA ? 1 : 0,
-            transition: `opacity ${transitionMs}ms ease-in-out`,
-          }}
+        <PhotoLayer
+          url={bgA}
+          visible={layerA}
+          transitionMs={transitionMs}
+          intervalSeconds={settings.intervalSeconds}
+          cropFill={settings.cropFill}
         />
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: `url('${bgB}')`,
-            backgroundSize: bgSize,
-            backgroundPosition: 'center center',
-            backgroundRepeat: 'no-repeat',
-            opacity: layerA ? 0 : 1,
-            transition: `opacity ${transitionMs}ms ease-in-out`,
-          }}
+        <PhotoLayer
+          url={bgB}
+          visible={!layerA}
+          transitionMs={transitionMs}
+          intervalSeconds={settings.intervalSeconds}
+          cropFill={settings.cropFill}
+          reverse
         />
         <div className="absolute inset-0 bg-black" style={{ opacity: overlayAlpha }} />
         {settings.showMeta && currentMeta?.filename && (
@@ -547,15 +592,23 @@ export default function App() {
       <div className="h-9 md:h-10 shrink-0 bg-black/80 border-t border-white/10 flex items-center overflow-hidden">
         {quotes.length > 0 ? (
           <TickerRow quotes={quotes} />
+        ) : settings.tickers.length === 0 && FINNHUB_KEY && !stocksErr ? (
+          <button
+            onClick={() => {
+              window.history.pushState({}, '', '/connect');
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            }}
+            className="px-4 text-[12px] text-white/50"
+          >
+            add tickers on /connect
+          </button>
         ) : (
           <div className="px-4 text-[12px] text-white/50">
             {stocksErr
               ? `stocks: ${stocksErr}`
               : !FINNHUB_KEY
                 ? 'set VITE_FINNHUB_API_KEY in .env'
-                : settings.tickers.length === 0
-                  ? 'add tickers on /connect'
-                  : 'loading quotes…'}
+                : 'loading quotes…'}
           </div>
         )}
       </div>

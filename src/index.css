@@ -4,3 +4,28 @@
 
 html, body, #root { height: 100%; }
 body { margin: 0; }
+
+@keyframes atrium-photo-fit {
+  from { transform: scale(0.985) translate3d(-0.35%, 0.2%, 0); }
+  to { transform: scale(1) translate3d(0, 0, 0); }
+}
+
+@keyframes atrium-photo-fill {
+  from { transform: scale(1.01) translate3d(-0.35%, 0.2%, 0); }
+  to { transform: scale(1.045) translate3d(0.35%, -0.2%, 0); }
+}
+
+.atrium-photo-motion-fit,
+.atrium-photo-motion-fill {
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+  will-change: transform;
+}
+
+.atrium-photo-motion-fit { animation-name: atrium-photo-fit; }
+.atrium-photo-motion-fill { animation-name: atrium-photo-fill; }
+
+@media (prefers-reduced-motion: reduce) {
+  .atrium-photo-motion-fit,
+  .atrium-photo-motion-fill { animation: none; }
+}

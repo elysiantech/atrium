@@ -1,4 +1,5 @@
 import ICAL from 'ical.js';
+import { isNativeAndroid } from './native';
 
 export type CalendarEvent = {
   start: Date;
@@ -12,10 +13,13 @@ export type CalendarDay = {
   events: CalendarEvent[];
 };
 
-const ICAL_PROXY = '/api/ical';
+const ICAL_SOURCE = isNativeAndroid
+  ? (import.meta.env.VITE_ICAL_URL ?? '')
+  : '/api/ical';
 
 export async function fetchCalendar(daysBack = 14, daysForward = 14): Promise<CalendarDay[]> {
-  const res = await fetch(ICAL_PROXY);
+  if (!ICAL_SOURCE) throw new Error('VITE_ICAL_URL is not configured');
+  const res = await fetch(ICAL_SOURCE);
   if (!res.ok) throw new Error(`iCal ${res.status}`);
   const text = await res.text();
   if (!text.startsWith('BEGIN:VCALENDAR')) {

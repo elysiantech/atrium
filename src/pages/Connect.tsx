@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchSettings, saveSettings, DEFAULT_SETTINGS, type DisplaySettings } from '../lib/settings';
+import { App as CapacitorApp } from '@capacitor/app';
+import type { PluginListenerHandle } from '@capacitor/core';
+import { fetchSettings, saveSettings, readCachedSettings, type DisplaySettings } from '../lib/settings';
+import { AtriumNative, isNativeAndroid } from '../lib/native';
 
 type Status = {
   gphotos: {
@@ -49,33 +52,51 @@ export default function Connect() {
   const [banner, setBanner] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [picking, setPicking] = useState(false);
-  const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS);
-  const [tickerInput, setTickerInput] = useState('');
+  const syncingPhotos = useRef(false);
+  const [settings, setSettings] = useState<DisplaySettings>(readCachedSettings);
+  const [tickerInput, setTickerInput] = useState(() => readCachedSettings().tickers.join(', '));
+  const [savingTickers, setSavingTickers] = useState(false);
   const confirmTimer = useRef<number | null>(null);
 
   useEffect(() => {
     setTickerInput(settings.tickers.join(', '));
   }, [settings.tickers]);
 
-  function commitTickers() {
+  async function commitTickers() {
     const parsed = tickerInput
       .split(/[,\s]+/)
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
-    if (parsed.join(',') === settings.tickers.join(',')) return;
-    patch({ tickers: parsed });
+    setSavingTickers(true);
+    try {
+      const next = await saveSettings({ tickers: parsed });
+      setSettings(next);
+      setTickerInput(next.tickers.join(', '));
+      return next;
+    } finally {
+      setSavingTickers(false);
+    }
   }
 
   async function patch(p: Partial<DisplaySettings>) {
     const next = { ...settings, ...p };
     setSettings(next);
-    try { await saveSettings(p); } catch (e) {
+    try {
+      const saved = await saveSettings(p);
+      setSettings(saved);
+    } catch (e) {
       setBanner({ kind: 'error', text: `settings save: ${e instanceof Error ? e.message : String(e)}` });
+      throw e;
     }
   }
 
   async function loadStatus() {
     try {
+      if (isNativeAndroid) {
+        const gphotos = await AtriumNative.getPhotoStatus();
+        setStatus({ gphotos });
+        return;
+      }
       const r = await fetch('/api/sources');
       if (r.ok) setStatus(await r.json());
     } catch { /* ignore */ }
@@ -102,7 +123,55 @@ export default function Connect() {
     return () => clearInterval(t);
   }, []);
 
-  function connect() {
+  async function downloadPickedPhotos() {
+    if (!isNativeAndroid || syncingPhotos.current) return;
+    syncingPhotos.current = true;
+    setPicking(true);
+    setBanner({ kind: 'ok', text: 'Downloading your selected photos to Atrium…' });
+    try {
+      const gphotos = await AtriumNative.syncPhotos();
+      setStatus({ gphotos });
+      setBanner({
+        kind: 'ok',
+        text: `Downloaded ${gphotos.cachedCount} photo${gphotos.cachedCount === 1 ? '' : 's'}. They are ready for offline rotation.`,
+      });
+    } catch (e) {
+      setBanner({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+      await loadStatus();
+    } finally {
+      syncingPhotos.current = false;
+      setPicking(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isNativeAndroid) return;
+    let handle: PluginListenerHandle | undefined;
+    let disposed = false;
+    void CapacitorApp.addListener('resume', () => {
+      void downloadPickedPhotos();
+    }).then((listener) => {
+      if (disposed) void listener.remove();
+      else handle = listener;
+    });
+    return () => {
+      disposed = true;
+      void handle?.remove();
+    };
+  }, []);
+
+  async function connect() {
+    if (isNativeAndroid) {
+      setBanner(null);
+      try {
+        await AtriumNative.authorizePhotos();
+        setBanner({ kind: 'ok', text: 'Connected to Google Photos.' });
+        await loadStatus();
+      } catch (e) {
+        setBanner({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     const returnTo = window.location.origin + '/connect';
     window.location.href = `/api/sources/gphotos/oauth/start?returnTo=${encodeURIComponent(returnTo)}`;
   }
@@ -111,12 +180,20 @@ export default function Connect() {
     setPicking(true);
     setBanner(null);
     try {
-      const r = await fetch('/api/sources/gphotos/pick', { method: 'POST' });
-      if (!r.ok) throw new Error(`pick ${r.status}: ${await r.text()}`);
-      const j = (await r.json()) as { pickerUri: string };
-      window.open(j.pickerUri, '_blank', 'noopener');
-      setBanner({ kind: 'ok', text: 'Picker opened in a new tab. Finish picking — photos appear on the dashboard as they load.' });
-      await loadStatus();
+      if (isNativeAndroid) {
+        await AtriumNative.startPhotoPicker();
+      } else {
+        const r = await fetch('/api/sources/gphotos/pick', { method: 'POST' });
+        if (!r.ok) throw new Error(`pick ${r.status}: ${await r.text()}`);
+        const j = (await r.json()) as { pickerUri: string };
+        window.open(j.pickerUri, '_blank', 'noopener');
+      }
+      if (isNativeAndroid) {
+        setBanner({ kind: 'ok', text: 'Finish selecting photos and tap Done. Atrium will download them when you return.' });
+      } else {
+        setBanner({ kind: 'ok', text: 'Picker opened in a new tab. Finish picking — photos appear on the dashboard as they load.' });
+        await loadStatus();
+      }
     } catch (e) {
       setBanner({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -139,6 +216,12 @@ export default function Connect() {
   async function disconnect() {
     setBanner(null);
     try {
+      if (isNativeAndroid) {
+        await AtriumNative.disconnectPhotos();
+        setBanner({ kind: 'ok', text: 'Disconnected. Credentials and cached photos removed.' });
+        await loadStatus();
+        return;
+      }
       const r = await fetch('/api/sources/gphotos/disconnect', { method: 'POST' });
       if (!r.ok) throw new Error(`disconnect ${r.status}: ${await r.text()}`);
       setBanner({ kind: 'ok', text: 'Disconnected. Credentials and cached photos removed.' });
@@ -148,13 +231,37 @@ export default function Connect() {
     }
   }
 
+  async function signOutAndKeepPhotos() {
+    setBanner(null);
+    try {
+      await AtriumNative.signOutPhotos();
+      await loadStatus();
+      setBanner({
+        kind: 'ok',
+        text: 'Atrium’s Google authorization was revoked. Downloaded photos were kept. Remove the Google account from Android settings to sign this device out completely.',
+      });
+    } catch (e) {
+      setBanner({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  async function backToDashboard() {
+    try {
+      await commitTickers();
+      window.history.pushState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch (e) {
+      setBanner({ kind: 'error', text: `settings save: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
   const g = status?.gphotos;
   const loaded = status !== null;
 
   return (
     <div className="min-h-screen bg-black text-white font-sans">
       <div className="mx-auto max-w-3xl px-6 py-10">
-        <a href="/" className="text-[13px] text-white/60 hover:text-white/90">← back to dashboard</a>
+        <button onClick={backToDashboard} className="text-[13px] text-white/60 hover:text-white/90">← back to dashboard</button>
         <h1 className="mt-4 text-[32px] font-thin tracking-tight">Sources</h1>
         <p className="mt-1 text-[13px] text-white/60">Connect photo sources and manage picks.</p>
 
@@ -208,7 +315,9 @@ export default function Connect() {
                 Connect Google Photos
               </button>
               <div className="mt-2 text-[11px] text-white/50">
-                OAuth must be completed from a browser on the mini itself (<code>http://localhost:{window.location.port || '5173'}/connect</code>). Google requires a loopback redirect, so connecting from a phone/laptop on the LAN will silently fail.
+                {isNativeAndroid
+                  ? 'Google authorization is stored securely for Atrium on this device.'
+                  : <>OAuth must be completed from a browser on the mini itself (<code>http://localhost:{window.location.port || '5173'}/connect</code>). Google requires a loopback redirect, so connecting from a phone/laptop on the LAN will silently fail.</>}
               </div>
             </div>
           )}
@@ -223,7 +332,24 @@ export default function Connect() {
                 {picking ? 'Opening picker…' : 'Pick your photos →'}
               </button>
               <div className="mt-2 text-[11px] text-white/50">
-                Opens the Google Photos picker in a new tab. Select photos on any device — they appear on the dashboard as the rotation cycles.
+                {isNativeAndroid
+                  ? 'Opens Google Photos on this device. Atrium caches every selected photo for offline rotation.'
+                  : 'Opens the Google Photos picker in a new tab. Select photos on any device — they appear on the dashboard as the rotation cycles.'}
+              </div>
+            </div>
+          )}
+
+          {loaded && g?.connected && g.hasSession && (
+            <div className="mt-3">
+              <button
+                onClick={() => { void downloadPickedPhotos(); }}
+                disabled={picking}
+                className="rounded border border-emerald-500/40 bg-emerald-900/20 px-4 py-2 text-[13px] text-emerald-100 hover:bg-emerald-900/40 disabled:opacity-40"
+              >
+                {picking ? 'Downloading selected photos…' : 'Download completed selection'}
+              </button>
+              <div className="mt-2 text-[11px] text-white/50">
+                Use this if the picker closed before Atrium automatically started the download.
               </div>
             </div>
           )}
@@ -238,6 +364,12 @@ export default function Connect() {
                 Re-pick photos
               </button>
               <button
+                onClick={signOutAndKeepPhotos}
+                className="rounded border border-white/20 bg-white/10 px-4 py-2 text-[13px] text-white/80 hover:bg-white/20"
+              >
+                Sign out · keep photos
+              </button>
+              <button
                 onClick={onDisconnectClick}
                 className={`ml-auto rounded border px-4 py-2 text-[13px] ${
                   confirmDisconnect
@@ -246,6 +378,18 @@ export default function Connect() {
                 }`}
               >
                 {confirmDisconnect ? 'Click again to confirm' : 'Disconnect'}
+              </button>
+            </div>
+          )}
+
+          {isNativeAndroid && loaded && !g?.connected && (g?.cachedCount ?? 0) > 0 && (
+            <div className="mt-4 text-[12px] text-emerald-200/80">
+              {g?.cachedCount} downloaded photo{g?.cachedCount === 1 ? '' : 's'} available offline.
+              <button
+                onClick={() => { void AtriumNative.openAccountSettings(); }}
+                className="ml-2 underline text-white/70 hover:text-white"
+              >
+                Open Android account settings
               </button>
             </div>
           )}
@@ -300,7 +444,10 @@ export default function Connect() {
               onChange={(e) => patch({ cropFill: e.target.checked })}
               className="h-4 w-4 accent-white"
             />
-            <span>Crop to fill the entire screen</span>
+            <span>
+              Crop to fill the entire screen
+              <span className="block text-[11px] text-white/50">Off shows the whole photo over a softly blurred backdrop with gentle motion.</span>
+            </span>
           </label>
 
           <label className="flex items-center gap-3 text-[13px] cursor-pointer">
@@ -322,19 +469,42 @@ export default function Connect() {
               type="text"
               value={tickerInput}
               onChange={(e) => setTickerInput(e.target.value)}
-              onBlur={commitTickers}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.currentTarget.blur();
+                  void commitTickers().catch((error) => {
+                    setBanner({ kind: 'error', text: `settings save: ${error instanceof Error ? error.message : String(error)}` });
+                  });
+                }
+              }}
               placeholder="NVDA, AMD, MSFT"
               className="mt-2 w-full rounded border border-white/15 bg-black/40 px-3 py-2 text-[13px] text-white focus:border-white/40 focus:outline-none"
             />
+            <button
+              type="button"
+              disabled={savingTickers}
+              onClick={async () => {
+                try {
+                  const next = await commitTickers();
+                  setBanner({ kind: 'ok', text: `Saved ${next.tickers.length} stock ticker${next.tickers.length === 1 ? '' : 's'}.` });
+                } catch (e) {
+                  setBanner({ kind: 'error', text: `settings save: ${e instanceof Error ? e.message : String(e)}` });
+                }
+              }}
+              className="mt-3 rounded border border-white/20 px-4 py-2 text-[13px] text-white/80 disabled:opacity-50"
+            >
+              {savingTickers ? 'Saving…' : 'Save tickers'}
+            </button>
             <div className="mt-1 text-[11px] text-white/50">
-              Comma- or space-separated. Saved on blur or Enter. Requires <code>VITE_FINNHUB_API_KEY</code> in <code>.env</code>.
+              Comma- or space-separated. Back to dashboard also saves. Requires <code>VITE_FINNHUB_API_KEY</code> in <code>.env</code>.
             </div>
           </div>
         </div>
 
         <div className="mt-8 text-[11px] text-white/40">
-          Cache at <code>cache/photos/</code>. Photos download on first display and stay cached. If Google is unreachable, cached images keep serving.
+          {isNativeAndroid
+            ? 'Photos are stored in Atrium’s private app cache. If Google is unreachable or the picker session expires, cached images keep rotating.'
+            : <>Cache at <code>cache/photos/</code>. Photos download on first display and stay cached. If Google is unreachable, cached images keep serving.</>}
         </div>
       </div>
     </div>

@@ -5,6 +5,77 @@ iCal feed), current weather + 7-day forecast (Open-Meteo), live drive
 times to configured destinations (Google Maps Routes API), and a
 scrolling stock ticker (Finnhub).
 
+## Android / ApolloSign
+
+Atrium is also a self-contained Android kiosk app. Capacitor packages the
+existing React/Vite interface into the APK, so there is no web server or
+remote browser page to keep running. The Android layer supplies kiosk mode,
+on-device settings, Google Photos authorization, Picker sessions, and a
+private offline photo cache. The dashboard component and its pointer gestures
+are shared unchanged with the browser build.
+
+The Android application ID is `com.wmondesir.atrium`. It is locked to
+landscape, keeps the display awake, and hides the system bars. Hold three
+fingers for two seconds to open Atrium's Sources screen. Hold four fingers for
+two seconds to leave kiosk mode and open Android Settings. These gestures are
+observed without consuming the existing one-finger calendar and ticker drags.
+
+For maintenance over an authorized ADB connection, open either screen directly:
+
+```sh
+adb shell am start -n com.wmondesir.atrium/.MainActivity --es atrium_path /connect
+adb shell am start -n com.wmondesir.atrium/.MainActivity --es atrium_path /
+```
+
+### Build a signed APK
+
+Prerequisites are Node/npm, JDK 21, and an Android SDK with API/build-tools 36.
+The release keystore belongs at `secrets/atrium-release.jks` (ignored by Git).
+Gradle reads its password from macOS Keychain account `atrium-build`, service
+`com.wmondesir.atrium.signing`; the keystore and Keychain item must both be
+backed up because future updates need the same signing identity.
+
+```sh
+npm install
+npm run android:apk
+```
+
+The signed artifact is
+`android/app/build/outputs/apk/release/app-release.apk`. Install or update the
+paired ApolloSign with:
+
+```sh
+adb install -r android/app/build/outputs/apk/release/app-release.apk
+```
+
+For Google Photos, create an Android OAuth client in the Google Cloud project
+that owns the Photos Picker API. Set package name `com.wmondesir.atrium` and
+register the SHA-1 fingerprint of the release certificate. No client secret is
+embedded in the APK: Google Play services authorizes the package/signature pair
+and manages short-lived access tokens. Atrium immediately downloads selections
+into private app storage, so cached photos continue rotating when the Picker
+session expires or the network is unavailable.
+
+### Safe Google Photos workflow for a household display
+
+Use a dedicated, otherwise empty Google account on ApolloSign rather than a
+personal account. Android accounts are device-wide: adding a personal Google
+account can also enable Gmail, Contacts, Calendar, and Chrome synchronization.
+
+1. Add the dedicated account to Android and turn off every account-sync item.
+2. In Atrium Sources, connect Google Photos and open the Picker.
+3. Select the approved photos and tap Done. Returning to Atrium starts an
+   awaited download; do not sign out until the green downloaded count appears.
+4. If the automatic download does not start, tap **Download completed
+   selection**.
+5. Tap **Sign out · keep photos** to revoke Atrium's Google grant without
+   deleting the private photo cache.
+6. Remove the Google account from Android Settings if the device should be
+   completely signed out. Cached photos continue rotating offline.
+
+**Disconnect** is intentionally different: it revokes Google authorization and
+deletes the downloaded photo cache.
+
 ## Local development
 
 ```sh
@@ -106,6 +177,7 @@ All prefixed `VITE_` — documented in `.env.example`.
 
 ## Security note
 
-All `VITE_*` env vars are inlined into the built client bundle. The app
-is designed to be served **on your LAN only** — do not deploy it to a
-public URL with these keys baked in.
+All `VITE_*` env vars are inlined into the built web bundle, including the copy
+inside the APK. Restrict API keys by API and, where supported, Android
+package/signing certificate. Do not commit `.env`, the release keystore, cached
+photos, or OAuth material.
