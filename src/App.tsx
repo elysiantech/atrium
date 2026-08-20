@@ -61,6 +61,24 @@ function trafficColor(minutes: number, typical: number): string {
   return 'text-white/95';
 }
 
+function isCommuteRefreshTime(date: Date): boolean {
+  const hour = date.getHours();
+  const minute = date.getMinutes();
+
+  const inMorningWindow = hour >= 7 && hour < 9;
+  const inEveningWindow = hour >= 16 && hour < 19;
+  if ((inMorningWindow || inEveningWindow) && minute % 15 === 0) return true;
+
+  return (
+    (hour === 6 && minute === 0)
+    || (hour === 10 && minute === 0)
+    || (hour === 12 && minute === 0)
+    || (hour === 14 && minute === 0)
+    || (hour === 20 && minute === 0)
+    || (hour === 21 && minute === 30)
+  );
+}
+
 function TickerRow({ quotes }: { quotes: Quote[] }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -273,13 +291,23 @@ export default function App() {
   useEffect(() => {
     if (!MAPS_KEY || !HOME || !DESTINATIONS.length) return;
     let cancelled = false;
+    let lastRefreshSlot = '';
     async function tick() {
-      const h = new Date().getHours();
-      if (h < 6 || h >= 22) return;
+      const now = new Date();
+      if (!isCommuteRefreshTime(now)) return;
+      const refreshSlot = [
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        now.getHours(),
+        now.getMinutes(),
+      ].join(':');
+      if (refreshSlot === lastRefreshSlot) return;
+      lastRefreshSlot = refreshSlot;
       if (!cancelled) await loadCommutes();
     }
     tick();
-    const t = setInterval(tick, 15 * 60_000);
+    const t = setInterval(tick, 30_000);
     return () => { cancelled = true; clearInterval(t); };
   }, [loadCommutes]);
 
