@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Cloud, CloudRain, CloudSun, Sun, Wind, Sunrise, Car } from 'lucide-react';
 import { fetchCalendar, type CalendarDay } from './lib/calendar';
 import {
@@ -41,8 +42,12 @@ function dayLabel(date: Date, today: Date): string {
 const PAST_DAYS = 14;
 const FUTURE_DAYS = 14;
 const VISIBLE_DAYS = 7;
+const RENDERED_DAYS = VISIBLE_DAYS + 2;
 const MIN_OFFSET = -PAST_DAYS;
 const MAX_OFFSET = FUTURE_DAYS - VISIBLE_DAYS + 1;
+const PHOTO_FRAME_TIMEOUT_MS = 60_000;
+const PHOTO_FRAME_HOLD_MS = 900;
+const PHOTO_SWIPE_THRESHOLD_PX = 56;
 
 function footerLabel(date: Date): string {
   return date.toLocaleDateString([], { weekday: 'short' }).toUpperCase();
@@ -237,6 +242,69 @@ export default function App() {
   const [bgA, setBgA] = useState<string>(fallback);
   const [bgB, setBgB] = useState<string>(fallback);
   const [settings, setSettings] = useState<DisplaySettings>(readCachedSettings);
+  const [photoFrameMode, setPhotoFrameMode] = useState(false);
+  const [frameInteraction, setFrameInteraction] = useState(0);
+  const framePointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const frameHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameSwipeRef = useRef<{ startX: number; pointerId: number } | null>(null);
+
+  const clearFrameHold = useCallback(() => {
+    if (frameHoldTimerRef.current) {
+      clearTimeout(frameHoldTimerRef.current);
+      frameHoldTimerRef.current = null;
+    }
+  }, []);
+
+  const armFrameToggle = useCallback(() => {
+    clearFrameHold();
+    frameHoldTimerRef.current = setTimeout(() => {
+      setPhotoFrameMode((active) => !active);
+      setFrameInteraction((n) => n + 1);
+      framePointersRef.current.clear();
+      frameHoldTimerRef.current = null;
+    }, PHOTO_FRAME_HOLD_MS);
+  }, [clearFrameHold]);
+
+  useEffect(() => () => clearFrameHold(), [clearFrameHold]);
+
+  useEffect(() => {
+    if (!photoFrameMode) return;
+    const timer = setTimeout(() => setPhotoFrameMode(false), PHOTO_FRAME_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [photoFrameMode, frameInteraction]);
+
+  const onRootPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    framePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (framePointersRef.current.size <= 2) armFrameToggle();
+  };
+
+  const onRootPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = framePointersRef.current.get(e.pointerId);
+    if (!start) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 18) clearFrameHold();
+  };
+
+  const onRootPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    framePointersRef.current.delete(e.pointerId);
+    if (framePointersRef.current.size < 2) clearFrameHold();
+  };
+
+  const onFrameSwipeDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (framePointersRef.current.size > 1 || frameSwipeRef.current) return;
+    frameSwipeRef.current = { startX: e.clientX, pointerId: e.pointerId };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onFrameSwipeUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const swipe = frameSwipeRef.current;
+    if (!swipe || swipe.pointerId !== e.pointerId) return;
+    frameSwipeRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    const delta = e.clientX - swipe.startX;
+    if (Math.abs(delta) < PHOTO_SWIPE_THRESHOLD_PX || photoIds.length < 2) return;
+    setPhotoIdx((i) => (i + (delta < 0 ? 1 : -1) + photoIds.length) % photoIds.length);
+    setFrameInteraction((n) => n + 1);
+  };
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -292,9 +360,9 @@ export default function App() {
     if (!MAPS_KEY || !HOME || !DESTINATIONS.length) return;
     let cancelled = false;
     let lastRefreshSlot = '';
-    async function tick() {
+    async function tick(force = false) {
       const now = new Date();
-      if (!isCommuteRefreshTime(now)) return;
+      if (!force && !isCommuteRefreshTime(now)) return;
       const refreshSlot = [
         now.getFullYear(),
         now.getMonth(),
@@ -306,7 +374,7 @@ export default function App() {
       lastRefreshSlot = refreshSlot;
       if (!cancelled) await loadCommutes();
     }
-    tick();
+    tick(true);
     const t = setInterval(tick, 30_000);
     return () => { cancelled = true; clearInterval(t); };
   }, [loadCommutes]);
@@ -407,10 +475,17 @@ export default function App() {
 
   const [dayOffset, setDayOffset] = useState(0);
   const [dragPx, setDragPx] = useState(0);
-  const [colWidth, setColWidth] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef<{ startX: number; pointerId: number } | null>(null);
+  const dragRef = useRef<{ startX: number; currentX: number; pointerId: number } | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+
+  const resetCalendarViewport = useCallback(() => {
+    setNow(new Date());
+    setDayOffset(0);
+    setDragPx(0);
+    setIsDragging(false);
+    dragRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (dayOffset === 0 || isDragging) return;
@@ -419,31 +494,47 @@ export default function App() {
   }, [dayOffset, isDragging]);
 
   useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) return;
-    const update = () => setColWidth(grid.clientWidth / VISIBLE_DAYS);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(grid);
-    return () => ro.disconnect();
-  }, []);
+    if (!photoFrameMode) resetCalendarViewport();
+  }, [photoFrameMode, resetCalendarViewport]);
 
-  const stripDays = useMemo(() => {
-    const totalDays = PAST_DAYS + FUTURE_DAYS + 1;
+  useEffect(() => {
+    let disposed = false;
+    let removeResumeListener: (() => void) | undefined;
+    const onVisible = () => {
+      if (!document.hidden) resetCalendarViewport();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    void CapacitorApp.addListener('resume', resetCalendarViewport).then((handle) => {
+      if (disposed) {
+        void handle.remove();
+      } else {
+        removeResumeListener = () => { void handle.remove(); };
+      }
+    });
+
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      removeResumeListener?.();
+    };
+  }, [resetCalendarViewport]);
+
+  const renderedDays = useMemo(() => {
     const byKey = new Map(days.map((d) => [d.date.toDateString(), d]));
     const out: { date: Date; day: CalendarDay | undefined }[] = [];
-    for (let i = 0; i < totalDays; i++) {
+    for (let i = 0; i < RENDERED_DAYS; i++) {
       const date = new Date(today);
-      date.setDate(date.getDate() - PAST_DAYS + i);
+      date.setDate(date.getDate() + dayOffset - 1 + i);
       out.push({ date, day: byKey.get(date.toDateString()) });
     }
     return out;
-  }, [days, today]);
+  }, [dayOffset, days, today]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const grid = gridRef.current;
-    if (!grid || colWidth <= 0) return;
-    dragRef.current = { startX: e.clientX, pointerId: e.pointerId };
+    if (!grid) return;
+    dragRef.current = { startX: e.clientX, currentX: e.clientX, pointerId: e.pointerId };
     setIsDragging(true);
     grid.setPointerCapture(e.pointerId);
   };
@@ -452,26 +543,32 @@ export default function App() {
     const drag = dragRef.current;
     if (!drag) return;
     const raw = e.clientX - drag.startX;
-    const minPx = (dayOffset - MAX_OFFSET) * colWidth;
-    const maxPx = (dayOffset - MIN_OFFSET) * colWidth;
-    setDragPx(Math.max(minPx, Math.min(maxPx, raw)));
+    drag.currentX = e.clientX;
+    setDragPx(raw);
   };
 
   const endDrag = () => {
     const drag = dragRef.current;
     if (!drag) return;
-    const raw = -dragPx / colWidth;
-    const deltaDays = Math.sign(raw) * Math.round(Math.abs(raw));
+    const grid = gridRef.current;
+    const dayWidth = grid && grid.clientWidth > 0 ? grid.clientWidth / VISIBLE_DAYS : 0;
+    const deltaDays = dayWidth > 0 ? Math.round(-(drag.currentX - drag.startX) / dayWidth) : 0;
     const next = Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, dayOffset + deltaDays));
     setDayOffset(next);
     setDragPx(0);
     setIsDragging(false);
-    gridRef.current?.releasePointerCapture(drag.pointerId);
+    if (grid?.hasPointerCapture(drag.pointerId)) grid.releasePointerCapture(drag.pointerId);
     dragRef.current = null;
   };
 
   return (
-    <div className="w-full h-screen overflow-hidden bg-black text-white font-sans flex flex-col">
+    <div
+      className="relative w-full h-screen overflow-hidden bg-black text-white font-sans flex flex-col"
+      onPointerDown={onRootPointerDown}
+      onPointerMove={onRootPointerMove}
+      onPointerUp={onRootPointerUp}
+      onPointerCancel={onRootPointerUp}
+    >
       <div className="relative flex-1 min-h-0 w-full bg-black">
         <PhotoLayer
           url={bgA}
@@ -495,7 +592,10 @@ export default function App() {
           </div>
         )}
 
-        <div className="relative z-10 flex h-full">
+        <div
+          className={`relative z-10 flex h-full ${photoFrameMode ? 'pointer-events-none opacity-0' : ''}`}
+          aria-hidden={photoFrameMode}
+        >
           <div className="w-[260px] shrink-0 flex h-full flex-col border-r border-white/20 bg-black/30 p-4 md:p-5">
             <div>
               <div className="text-[56px] md:text-[64px] font-thin tracking-tight leading-none whitespace-nowrap">{formatted.time}</div>
@@ -555,22 +655,21 @@ export default function App() {
             onPointerCancel={endDrag}
           >
             <div
-              className="flex h-full"
+              className="grid h-full"
               style={{
-                width: colWidth ? colWidth * stripDays.length : '100%',
-                transform: `translateX(${-(PAST_DAYS + dayOffset) * colWidth + dragPx}px)`,
-                transition: isDragging ? 'none' : 'transform 240ms ease-out',
+                width: `${(RENDERED_DAYS / VISIBLE_DAYS) * 100}%`,
+                gridTemplateColumns: `repeat(${RENDERED_DAYS}, minmax(0, 1fr))`,
+                transform: `translateX(calc(${-100 / RENDERED_DAYS}% + ${isDragging ? dragPx : 0}px))`,
                 willChange: 'transform',
               }}
             >
-              {stripDays.map(({ date, day }) => {
+              {renderedDays.map(({ date, day }) => {
                 const fc = forecast.find(f => f.date.toDateString() === date.toDateString());
                 const isToday = date.toDateString() === today.toDateString();
                 const highlightLabel = isToday && dayOffset !== 0;
                 return (
                   <div
                     key={date.toDateString()}
-                    style={{ width: colWidth || `${100 / VISIBLE_DAYS}%`, flexShrink: 0 }}
                     className={`relative flex h-full flex-col border-r border-white/20 ${isToday ? 'bg-black/30' : 'bg-black/10'}`}
                   >
                     <div className="px-3 pt-3 pb-1 shrink-0">
@@ -615,9 +714,31 @@ export default function App() {
             cal: {calErr}
           </div>
         )}
+
+        {photoFrameMode && (
+          <div
+            className="absolute inset-0 z-30 overflow-hidden bg-black cursor-grab active:cursor-grabbing"
+            style={{ touchAction: 'none' }}
+            aria-label="Photo frame. Swipe left or right to change photos. Hold to return to the dashboard."
+            onPointerDown={onFrameSwipeDown}
+            onPointerUp={onFrameSwipeUp}
+            onPointerCancel={onFrameSwipeUp}
+          >
+            <PhotoLayer
+              url={photoIds.length > 0 ? photoUrl(photoIds[photoIdx]) : fallback}
+              visible
+              transitionMs={transitionMs}
+              intervalSeconds={Math.min(settings.intervalSeconds, 30)}
+              cropFill
+            />
+          </div>
+        )}
       </div>
 
-      <div className="h-9 md:h-10 shrink-0 bg-black/80 border-t border-white/10 flex items-center overflow-hidden">
+      <div
+        className={`h-9 md:h-10 shrink-0 bg-black/80 border-t border-white/10 flex items-center overflow-hidden ${photoFrameMode ? 'pointer-events-none opacity-0' : ''}`}
+        aria-hidden={photoFrameMode}
+      >
         {quotes.length > 0 ? (
           <TickerRow quotes={quotes} />
         ) : settings.tickers.length === 0 && FINNHUB_KEY && !stocksErr ? (
