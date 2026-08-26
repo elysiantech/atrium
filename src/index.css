@@ -8,18 +8,22 @@ body { margin: 0; }
 @keyframes atrium-photo-fit {
   /* Fit-mode photos have blurred side margins, so give the foreground a
      slightly stronger drift/zoom to keep portrait and smaller images alive. */
-  from { transform: scale(1.02) translate3d(-1.2%, 0.7%, 0); }
-  to { transform: scale(1.10) translate3d(1.2%, -0.7%, 0); }
+  from { transform: scale(1.02) translate3d(-2%, 1.2%, 0); }
+  to { transform: scale(1.14) translate3d(2%, -1.2%, 0); }
 }
 
 @keyframes atrium-photo-fill {
-  from { transform: scale(1.02) translate3d(-1.2%, 0.7%, 0); }
-  to { transform: scale(1.10) translate3d(1.2%, -0.7%, 0); }
+  from { transform: scale(1.03) translate3d(-2.2%, 1.3%, 0); }
+  to { transform: scale(1.16) translate3d(2.2%, -1.3%, 0); }
 }
 
 .atrium-photo-motion-fit,
 .atrium-photo-motion-fill {
-  animation-timing-function: ease-in-out;
+  /* Motion has its own cadence. Photo rotation can be anywhere from seconds
+     to minutes, but the image should never appear frozen between changes. */
+  animation-duration: 22s;
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
   animation-fill-mode: both;
   will-change: transform;
 }

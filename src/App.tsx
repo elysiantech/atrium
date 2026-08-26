@@ -178,14 +178,12 @@ function PhotoLayer({
   url,
   visible,
   transitionMs,
-  intervalSeconds,
   cropFill,
   reverse = false,
 }: {
   url: string;
   visible: boolean;
   transitionMs: number;
-  intervalSeconds: number;
   cropFill: boolean;
   reverse?: boolean;
 }) {
@@ -215,8 +213,7 @@ function PhotoLayer({
         style={{
           ...background,
           backgroundSize: cropFill ? 'cover' : 'contain',
-          animationDuration: `${Math.max(15, intervalSeconds + 1)}s`,
-          animationDirection: reverse ? 'reverse' : 'normal',
+          animationDirection: reverse ? 'alternate-reverse' : 'alternate',
         }}
       />
     </div>
@@ -574,14 +571,12 @@ export default function App() {
           url={bgA}
           visible={layerA}
           transitionMs={transitionMs}
-          intervalSeconds={settings.intervalSeconds}
           cropFill={settings.cropFill}
         />
         <PhotoLayer
           url={bgB}
           visible={!layerA}
           transitionMs={transitionMs}
-          intervalSeconds={settings.intervalSeconds}
           cropFill={settings.cropFill}
           reverse
         />
@@ -728,8 +723,8 @@ export default function App() {
               url={photoIds.length > 0 ? photoUrl(photoIds[photoIdx]) : fallback}
               visible
               transitionMs={transitionMs}
-              intervalSeconds={Math.min(settings.intervalSeconds, 30)}
               cropFill
+              reverse={photoIdx % 2 === 1}
             />
           </div>
         )}
