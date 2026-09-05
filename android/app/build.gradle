@@ -1,14 +1,28 @@
 apply plugin: 'com.android.application'
 
 def atriumKeystore = rootProject.file('../secrets/atrium-release.jks')
-def atriumPasswordProcess = [
-    'security', 'find-generic-password', '-w',
-    '-a', 'atrium-build',
-    '-s', 'com.wmondesir.atrium.signing'
-].execute()
-def atriumSigningPassword = atriumPasswordProcess.text.trim()
-if (atriumPasswordProcess.waitFor() != 0 || atriumSigningPassword.isEmpty()) {
-    throw new GradleException('Atrium signing password is unavailable in macOS Keychain')
+
+// Signing password resolution, in order:
+//   1. ATRIUM_SIGNING_PASSWORD environment variable (any OS, CI)
+//   2. macOS Keychain generic password, account atrium-build, service com.wmondesir.atrium.signing
+def atriumSigningPassword = System.getenv('ATRIUM_SIGNING_PASSWORD')?.trim()
+if (!atriumSigningPassword) {
+    try {
+        def proc = [
+            'security', 'find-generic-password', '-w',
+            '-a', 'atrium-build',
+            '-s', 'com.wmondesir.atrium.signing'
+        ].execute()
+        def out = proc.text.trim()
+        if (proc.waitFor() == 0 && !out.isEmpty()) {
+            atriumSigningPassword = out
+        }
+    } catch (IOException ignored) {
+        // `security` is not available on this platform
+    }
+}
+if (!atriumSigningPassword) {
+    throw new GradleException('Atrium signing password not found. Set ATRIUM_SIGNING_PASSWORD or add Keychain item (account atrium-build, service com.wmondesir.atrium.signing).')
 }
 
 android {
