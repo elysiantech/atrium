@@ -72,22 +72,37 @@ different keystore also breaks Google Photos on the device.
 ## Deploying to the ApolloSign
 
 The ApolloSign is an Android touchscreen display on the home Wi-Fi that uses
-Android wireless debugging (TLS). Other Android devices on the same network
-also advertise adb, including an Amazon Fire TV (model AFTR). Never deploy by
-address alone. Identify the target by hardware before installing:
+Android wireless debugging (TLS). Its hardware identity:
+
+| Property | Value |
+|---|---|
+| `ro.product.manufacturer` | Electron |
+| `ro.product.brand` | Apolosign |
+| `ro.product.model` | Apolosign Calendar |
+| `ro.product.device` | FA2169T |
+| mDNS name | `adb-2512970370203-BefrAp` |
+
+An Amazon Fire TV (model AFTR) on the same network also advertises adb and
+was once mistaken for the sign. Never deploy by address alone; verify the
+properties above and that Atrium is already installed before `adb install`.
 
 ```sh
-adb mdns services            # sign appears as _adb-tls-connect._tcp, not _adb._tcp
-adb pair <ip>:<pairing-port> # first time per build machine; code and port come from
-                             # the sign's Wireless debugging > Pair device screen
+adb mdns services            # sign is the _adb-tls-connect._tcp entry named above
+adb pair <ip>:<pairing-port> <code>
+                             # first time per build machine only. Ask the user to open
+                             # Wireless debugging > Pair device with pairing code on the
+                             # sign and read the six-digit code. The pairing port shows
+                             # up in adb mdns services as _adb-tls-pairing._tcp while
+                             # that screen is open; do not ask the user for it.
 adb connect <ip>:<connect-port>
 adb devices -l
-adb -s <ip>:<port> shell getprop ro.product.manufacturer   # must NOT be Amazon
+adb -s <ip>:<port> shell getprop ro.product.manufacturer   # must be Electron
 adb -s <ip>:<port> shell dumpsys package com.wmondesir.atrium | grep firstInstallTime
 ```
 
 A device that has run Atrium before has an old firstInstallTime. No result
-means it is the wrong device. Then:
+means it is the wrong device. Pairing persists per build machine, so later
+deploys need no user interaction. Then:
 
 ```sh
 adb install -r android/app/build/outputs/apk/release/app-release.apk
