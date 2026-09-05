@@ -34,13 +34,17 @@ Always run `npm run build` (which runs tsc) before committing.
 ## Toolchain the build machine must have
 
 - Node 22.6 or newer. `server.ts` runs with `--experimental-strip-types`.
-- JDK 21 (`brew install openjdk@21`; set `JAVA_HOME` or symlink into `/Library/Java/JavaVirtualMachines`).
+- JDK 21: `brew install openjdk@21`, then link it where `java_home` looks, no sudo needed:
+  `ln -sfn /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk ~/Library/Java/JavaVirtualMachines/openjdk-21.jdk`.
+  After that `java -version` and Gradle both find JDK 21 with no `JAVA_HOME` export.
 - Android SDK: platform `android-36`, `build-tools;36.0.0`, `platform-tools`.
   On macOS via Homebrew: `brew install --cask android-commandlinetools android-platform-tools`,
   then `sdkmanager "platforms;android-36" "build-tools;36.0.0"` and accept licenses.
 - `android/local.properties` is gitignored. Create it with `sdk.dir=<absolute SDK path>`
   (Homebrew path is `/opt/homebrew/share/android-commandlinetools`).
 - Gradle itself comes from the wrapper (`gradlew`), no install needed.
+- Disk: JDK plus SDK packages take about 6 GB installed; first Gradle build adds roughly 2 GB of caches.
+- No shell profile changes are required. `ANDROID_HOME` is unnecessary because `local.properties` carries `sdk.dir`.
 
 ## Secrets and untracked files (never commit; copy by hand between machines)
 
