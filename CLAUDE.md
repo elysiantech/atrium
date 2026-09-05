@@ -71,9 +71,8 @@ different keystore also breaks Google Photos on the device.
 
 ## Deploying to the ApolloSign
 
-The display is an Amazon Fire TV device (model AFTR, product raven) on the
-home Wi-Fi. It runs classic adb over TCP on port 5555, so no wireless-debugging
-pairing is needed. Find it and connect:
+The display is the ApolloSign, an Android device on the home Wi-Fi. It
+exposes adb over TCP on port 5555. Find it and connect:
 
 ```sh
 adb mdns services      # lists adb-<serial> _adb._tcp <ip>:5555
