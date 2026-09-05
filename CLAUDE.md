@@ -71,26 +71,33 @@ different keystore also breaks Google Photos on the device.
 
 ## Deploying to the ApolloSign
 
-The display is the ApolloSign, an Android device on the home Wi-Fi. It
-exposes adb over TCP on port 5555. Find it and connect:
+The ApolloSign is an Android touchscreen display on the home Wi-Fi that uses
+Android wireless debugging (TLS). Other Android devices on the same network
+also advertise adb, including an Amazon Fire TV (model AFTR). Never deploy by
+address alone. Identify the target by hardware before installing:
 
 ```sh
-adb mdns services      # lists adb-<serial> _adb._tcp <ip>:5555
-adb connect 192.168.86.31:5555   # address as of 2026-09-05; DHCP may move it
-adb devices -l         # must say "device", not "unauthorized"
+adb mdns services            # sign appears as _adb-tls-connect._tcp, not _adb._tcp
+adb pair <ip>:<pairing-port> # first time per build machine; code and port come from
+                             # the sign's Wireless debugging > Pair device screen
+adb connect <ip>:<connect-port>
+adb devices -l
+adb -s <ip>:<port> shell getprop ro.product.manufacturer   # must NOT be Amazon
+adb -s <ip>:<port> shell dumpsys package com.wmondesir.atrium | grep firstInstallTime
+```
+
+A device that has run Atrium before has an old firstInstallTime. No result
+means it is the wrong device. Then:
+
+```sh
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 adb disconnect
 ```
 
-The sign has no practical input for approving a new adb host, so a new build
-machine shows "unauthorized" forever. Fix: copy `~/.android/adbkey` and
-`adbkey.pub` from an already-authorized machine (AirDrop, never a repo or chat
-channel), `chmod 600 adbkey`, then `adb kill-server` and reconnect. Bump
-`versionCode` in `android/app/build.gradle` on every release that ships to the
-device.
-
-To verify a deploy visually, wait 15 to 20 seconds after `am start` before
-`adb exec-out screencap -p`. Earlier captures show the black splash, not a bug.
+Bump `versionCode` in `android/app/build.gradle` on every release that ships
+to the device. To verify visually, wait 15 to 20 seconds after `am start`
+before `adb exec-out screencap -p`; earlier captures show the black splash.
+The real sign shows a stock ticker along the bottom.
 
 Maintenance shortcuts once installed:
 
