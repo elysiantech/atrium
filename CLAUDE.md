@@ -71,15 +71,20 @@ different keystore also breaks Google Photos on the device.
 
 ## Deploying to the ApolloSign
 
-The display is an Android device paired over ADB. Confirm it is visible first:
+The display is an Amazon Fire TV device (model AFTR, product raven) on the
+home Wi-Fi. It runs classic adb over TCP on port 5555, so no wireless-debugging
+pairing is needed. Find it and connect:
 
 ```sh
-adb devices -l
+adb mdns services      # lists adb-<serial> _adb._tcp <ip>:5555
+adb connect 192.168.86.31:5555   # address as of 2026-09-05; DHCP may move it
+adb devices -l         # must say "device", not "unauthorized"
 adb install -r android/app/build/outputs/apk/release/app-release.apk
+adb disconnect
 ```
 
-If it is not listed, connect over the LAN with `adb connect <sign-ip>:5555`
-(or wireless-debugging pairing) before installing. Bump `versionCode` in
+The first connect from a new machine shows "unauthorized" until someone taps
+Allow on the sign's on-screen debugging prompt. Bump `versionCode` in
 `android/app/build.gradle` on every release that ships to the device.
 
 Maintenance shortcuts once installed:
