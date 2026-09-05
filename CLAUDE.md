@@ -82,9 +82,15 @@ adb install -r android/app/build/outputs/apk/release/app-release.apk
 adb disconnect
 ```
 
-The first connect from a new machine shows "unauthorized" until someone taps
-Allow on the sign's on-screen debugging prompt. Bump `versionCode` in
-`android/app/build.gradle` on every release that ships to the device.
+The sign has no practical input for approving a new adb host, so a new build
+machine shows "unauthorized" forever. Fix: copy `~/.android/adbkey` and
+`adbkey.pub` from an already-authorized machine (AirDrop, never a repo or chat
+channel), `chmod 600 adbkey`, then `adb kill-server` and reconnect. Bump
+`versionCode` in `android/app/build.gradle` on every release that ships to the
+device.
+
+To verify a deploy visually, wait 15 to 20 seconds after `am start` before
+`adb exec-out screencap -p`. Earlier captures show the black splash, not a bug.
 
 Maintenance shortcuts once installed:
 
